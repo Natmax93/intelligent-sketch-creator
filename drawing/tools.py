@@ -15,3 +15,4 @@ class Tool(Enum):
     RECT = auto()  # Rectangle
     ELLIPSE = auto()  # Ellipse
     LINE = auto()  # Ligne
+    ERASER = auto()  # Gomme
