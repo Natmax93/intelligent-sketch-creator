@@ -48,6 +48,8 @@ class EventLogger:
             "tool",  # outil actif (PEN, SELECT, ...)
             "item_type",  # type d'objet graphique concerné
             "n_points",  # nombre de points (pour le stylo)
+            "stroke_color",  # <- AJOUT TODO : à commenter
+            "fill_color",  # <- AJOUT TODO : à commenter
             "notes",  # champ libre (debug / contexte)
         ]
 

@@ -7,8 +7,13 @@ Responsabilité :
 - afficher un panneau assistant sous forme de DockWidget
 """
 
-from PySide6.QtWidgets import QMainWindow, QToolBar, QGraphicsView, QDockWidget
-from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QToolBar,
+    QGraphicsView,
+    QDockWidget,
+)
+from PySide6.QtGui import QAction, QColor, QPixmap, QIcon, QActionGroup
 from PySide6.QtCore import Qt
 
 from drawing.scene import DrawingScene
@@ -34,6 +39,11 @@ class EditorWindow(QMainWindow):
 
         toolbar = QToolBar("Outils")
         self.addToolBar(toolbar)
+
+        def make_color_icon(color: QColor) -> QIcon:
+            pm = QPixmap(16, 16)
+            pm.fill(color)
+            return QIcon(pm)
 
         def set_tool_and_view_mode(tool: Tool):
             self.scene.set_tool(tool)
@@ -66,6 +76,61 @@ class EditorWindow(QMainWindow):
         act_ellipse = QAction("Ellipse", self)
         act_ellipse.triggered.connect(lambda: set_tool_and_view_mode(Tool.ELLIPSE))
         toolbar.addAction(act_ellipse)
+
+        toolbar.addSeparator()
+
+        stroke_colors = [
+            ("Noir", QColor("#000000")),
+            ("Rouge", QColor("#e53935")),
+            ("Vert", QColor("#43a047")),
+            ("Bleu", QColor("#1e88e5")),
+            ("Violet", QColor("#8e24aa")),
+            ("Orange", QColor("#fb8c00")),
+        ]
+
+        stroke_group = QActionGroup(self)
+        stroke_group.setExclusive(True)
+
+        for i, (name, c) in enumerate(stroke_colors):
+            act = QAction(make_color_icon(c), name, self)
+            act.setCheckable(True)
+            if i == 0:
+                act.setChecked(True)  # noir par défaut
+            act.triggered.connect(
+                lambda checked=False, col=c: self.scene.set_stroke_color(col)
+            )
+            stroke_group.addAction(act)
+            toolbar.addAction(act)
+
+        toolbar.addSeparator()
+
+        fill_group = QActionGroup(self)
+        fill_group.setExclusive(True)
+
+        # Action “Aucun”
+        act_fill_none = QAction("Fill: aucun", self)
+        act_fill_none.setCheckable(True)
+        act_fill_none.setChecked(True)  # fill None par défaut
+        act_fill_none.triggered.connect(lambda: self.scene.set_fill_color(None))
+        fill_group.addAction(act_fill_none)
+        toolbar.addAction(act_fill_none)
+
+        fill_colors = [
+            ("Fill rouge", QColor("#ffcdd2")),
+            ("Fill vert", QColor("#c8e6c9")),
+            ("Fill bleu", QColor("#bbdefb")),
+            ("Fill jaune", QColor("#fff9c4")),
+            ("Fill gris", QColor("#eeeeee")),
+        ]
+
+        for name, c in fill_colors:
+            act = QAction(make_color_icon(c), name, self)
+            act.setCheckable(True)
+            act.triggered.connect(
+                lambda checked=False, col=c: self.scene.set_fill_color(col)
+            )
+            fill_group.addAction(act)
+            toolbar.addAction(act)
 
         dock = QDockWidget("Assistant", self)
         dock.setWidget(AssistantPanel())

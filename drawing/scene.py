@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsEllipseItem,
 )
-from PySide6.QtGui import QPainterPath, QPen
+from PySide6.QtGui import QPainterPath, QPen, QColor, QBrush
 from PySide6.QtCore import QRectF, QLineF
 
 from drawing.tools import Tool
@@ -37,6 +37,9 @@ class DrawingScene(QGraphicsScene):
 
         self._tool = Tool.SELECT
         self.logger = logger
+
+        self._stroke_color = QColor("#000000")  # noir par défaut
+        self._fill_color = None  # None = pas de remplissage
 
         # ---- PEN ----
         self._current_path = None
@@ -55,7 +58,7 @@ class DrawingScene(QGraphicsScene):
     # Utils
     # ----------------------------
     def _make_pen(self, width=2):
-        pen = QPen()
+        pen = QPen(self._stroke_color)
         pen.setWidth(width)
         return pen
 
@@ -71,6 +74,13 @@ class DrawingScene(QGraphicsScene):
         view = self.views()[0]
         return self.itemAt(scene_pos, view.transform())
 
+    def _apply_fill(self, item):
+        # rect/ellipse supportent un brush; line/path aussi, mais ça ne sert pas
+        if self._fill_color is None:
+            item.setBrush(QBrush())  # “vide” => pas de remplissage
+        else:
+            item.setBrush(QBrush(self._fill_color))
+
     def set_tool(self, tool: Tool):
         self._tool = tool
         if self.logger:
@@ -78,6 +88,28 @@ class DrawingScene(QGraphicsScene):
 
     def tool(self) -> Tool:
         return self._tool
+
+    def set_stroke_color(self, color: QColor):
+        self._stroke_color = QColor(color)
+        if self.logger:
+            self.logger.log(
+                event_type="stroke_color_change",
+                stroke_color=self._stroke_color.name(),
+            )
+
+    def stroke_color(self) -> QColor:
+        return QColor(self._stroke_color)
+
+    def set_fill_color(self, color: QColor | None):
+        self._fill_color = QColor(color) if color is not None else None
+        if self.logger:
+            self.logger.log(
+                event_type="fill_color_change",
+                fill_color=(self._fill_color.name() if self._fill_color else "none"),
+            )
+
+    def fill_color(self):
+        return QColor(self._fill_color) if self._fill_color is not None else None
 
     # ------------------------------------------------------------------
     # Mouse events
@@ -138,6 +170,7 @@ class DrawingScene(QGraphicsScene):
             self._shape_start = p
             self._shape_item = QGraphicsRectItem(QRectF(p, p))
             self._shape_item.setPen(self._make_pen(width=2))
+            self._apply_fill(self._shape_item)
             self._enable_interaction_flags(self._shape_item)
             self.addItem(self._shape_item)
 
@@ -152,6 +185,7 @@ class DrawingScene(QGraphicsScene):
             self._shape_start = p
             self._shape_item = QGraphicsEllipseItem(QRectF(p, p))
             self._shape_item.setPen(self._make_pen(width=2))
+            self._apply_fill(self._shape_item)
             self._enable_interaction_flags(self._shape_item)
             self.addItem(self._shape_item)
 
