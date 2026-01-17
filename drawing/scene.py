@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem,  # Item pour un rectangle
     QGraphicsEllipseItem,  # Item pour une ellipse
     QApplication,  # Accès au clipboard (copy/paste)
+    QGraphicsPolygonItem,  # Item pour polygone
 )
 
 # Outils graphiques + pile undo/redo
@@ -34,6 +35,7 @@ from PySide6.QtGui import (
     QColor,  # Couleurs (hex, RGB...)
     QBrush,  # Style de remplissage (fill) des formes
     QUndoStack,  # Pile de commandes pour Annuler/Rétablir (Undo/Redo)
+    QPolygonF,
 )
 
 # Types géométriques
@@ -42,6 +44,7 @@ from PySide6.QtCore import (
     QLineF,  # Segment flottant
     QPointF,  # Point flottant
     Signal,
+    Qt,
 )
 
 # Enum métier des outils (SELECT, PEN, ERASER, LINE, RECT, ELLIPSE, ...)
@@ -134,10 +137,12 @@ class DrawingScene(QGraphicsScene):
 
         # Récupère le fill si l'item expose brush()
         fill = "none"
-        if hasattr(item, "brush"):
-            b = item.brush()
-            if b.style() != 0:  # Qt.NoBrush == 0 => pas de remplissage
-                fill = b.color().name()
+        b = item.brush()
+        if b.style() != Qt.BrushStyle.NoBrush:
+            c = b.color()
+            # optionnel : si alpha 0, on considère "none"
+            if c.alpha() != 0:
+                fill = c.name()
 
         # Données communes à tous les types d'items
         base = {
@@ -174,6 +179,17 @@ class DrawingScene(QGraphicsScene):
                 # e.type : MoveTo/LineTo/CurveTo... (on le garde pour info/debug)
                 elems.append([e.x, e.y, int(e.type)])
             base["path_elems"] = elems
+
+        elif isinstance(item, QGraphicsPolygonItem):
+            poly = item.polygon()
+            base["polygon"] = [
+                [poly.at(i).x(), poly.at(i).y()] for i in range(poly.count())
+            ]
+
+            # Optionnel : préserver un tag assistant si tu en utilises un
+            tag = item.data(int(Qt.UserRole))
+            if tag is not None:
+                base["assistant_tag"] = tag
 
         else:
             # Type non supporté : on ne peut pas copier/coller cet item
@@ -213,12 +229,12 @@ class DrawingScene(QGraphicsScene):
 
     def _apply_fill(self, item):
         """
-        Applique le remplissage (fill) courant à l'item.
-        Utile surtout pour RECT/ELLIPSE (le fill n'a pas d'intérêt sur LINE/Path).
+        Applique le remplissage courant de la scène (self._fill_color) à l'item.
+        - self._fill_color == None => NoBrush
+        - sinon => brush de cette couleur
         """
         if self._fill_color is None:
-            # Brush “vide” => pas de remplissage
-            item.setBrush(QBrush())
+            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         else:
             item.setBrush(QBrush(self._fill_color))
 
@@ -235,7 +251,7 @@ class DrawingScene(QGraphicsScene):
         Reconstruit un brush depuis des données sérialisées (clipboard).
         """
         if fill_hex == "none":
-            item.setBrush(QBrush())
+            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         else:
             item.setBrush(QBrush(QColor(fill_hex)))
 
@@ -291,6 +307,17 @@ class DrawingScene(QGraphicsScene):
 
             item = QGraphicsPathItem(path)
             item.setPen(pen)
+
+        elif t == "QGraphicsPolygonItem":
+            pts = data["polygon"]
+            poly = QPolygonF([QPointF(x, y) for x, y in pts])
+            item = QGraphicsPolygonItem(poly)
+            item.setPen(pen)
+            self._apply_fill_from(item, fill)
+
+            # Optionnel : restaurer le tag assistant
+            if "assistant_tag" in data:
+                item.setData(int(Qt.UserRole), data["assistant_tag"])
 
         # Type inconnu/non supporté
         if item is None:

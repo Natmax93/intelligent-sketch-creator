@@ -1,6 +1,16 @@
 import time
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
+
 from assistant import wizard
 from ui.suggestion_dialog import SuggestionDialog
+from drawing.commands import AddItemCommand
+
+
+# Doit matcher le tag que tu mettras sur les oreilles dans assistant/suggestions.py
+ASSISTANT_TAG_ROLE = int(Qt.UserRole)
+TAG_CAT_EAR = "assistant:cat_ear"
+TAG_ROOF_TRIANGLE = "assistant:roof_triangle"
 
 
 class AssistantController:
@@ -11,6 +21,9 @@ class AssistantController:
 
         self.auto_enabled = False
         self.floating_visible = True
+
+        # Suggestions ignorées/refusées en auto (dans cette session)
+        self._auto_suppressed = set()
 
         # Trigger automatique : quand un item utilisateur est créé
         self.scene.item_created.connect(self.on_item_created)
@@ -30,48 +43,73 @@ class AssistantController:
             self.logger.log("assistant_floating_toggle", notes=str(visible))
 
     # ---------- Context helpers ----------
-    def _build_context(self, trigger: str):
-        # contexte minimal pour le prototype
-        has_ellipse = any(
-            it.__class__.__name__ == "QGraphicsEllipseItem" for it in self.scene.items()
+    def _build_context(self, trigger: str, created_item=None):
+        items = self.scene.items()
+
+        has_ellipse = any(isinstance(it, QGraphicsEllipseItem) for it in items)
+        has_rect = any(isinstance(it, QGraphicsRectItem) for it in items)
+
+        has_cat_ears = any(
+            getattr(it, "data", lambda *_: None)(ASSISTANT_TAG_ROLE) == TAG_CAT_EAR
+            for it in items
         )
-        return {"trigger": trigger, "has_ellipse": has_ellipse}
+        has_roof_triangle = any(
+            getattr(it, "data", lambda *_: None)(ASSISTANT_TAG_ROLE)
+            == TAG_ROOF_TRIANGLE
+            for it in items
+        )
+
+        created_kind = type(created_item).__name__ if created_item is not None else None
+
+        return {
+            "trigger": trigger,
+            "has_ellipse": has_ellipse,
+            "has_rect": has_rect,
+            "has_cat_ears": has_cat_ears,
+            "has_roof_triangle": has_roof_triangle,
+            "created_kind": created_kind,
+            "auto_suppressed": set(self._auto_suppressed),
+        }
 
     # ---------- Triggers ----------
     def on_manual_invoke(self):
         if self.logger:
             self.logger.log("invoke_help", tool="ASSISTANT")
 
-        self._try_suggest(trigger="manual")
+        self._try_suggest(trigger="manual", created_item=None)
 
     def on_item_created(self, item):
         if not self.auto_enabled:
             return
-        self._try_suggest(trigger="auto")
+        self._try_suggest(trigger="auto", created_item=item)
 
     # ---------- Suggestion flow ----------
-    def _try_suggest(self, trigger: str):
-        ctx = self._build_context(trigger)
+    def _try_suggest(self, trigger: str, created_item=None):
+        ctx = self._build_context(trigger, created_item=created_item)
         t0 = time.time()
 
         proposal = wizard.propose_suggestion(ctx)
 
         if proposal is None:
-            # Abstention / "Pas de suggestion"
+            # Abstention : en auto on ne montre rien
             if self.logger:
-                self.logger.log("ai_output", notes="none")
-            dlg = SuggestionDialog(
-                title="Pas de suggestion",
-                uncertainty_pct=0,
-                explanation=["Précondition non satisfaite (ex: aucune ellipse)."],
-                what_to_do="Dessinez d'abord une forme cible, ou invoquez plus tard.",
-            )
-            dlg.exec()
+                self.logger.log("ai_output", tool="ASSISTANT", notes=f"none:{trigger}")
+            if trigger == "manual":
+                dlg = SuggestionDialog(
+                    title="Pas de suggestion",
+                    uncertainty_pct=0,
+                    explanation=["Aucune suggestion pertinente pour le moment."],
+                    what_to_do="Ajoutez une forme cible, ou réessayez plus tard.",
+                )
+                dlg.exec()
             return
 
         # Log : suggestion affichée
         if self.logger:
-            self.logger.log("ai_output", notes="shown")
+            sid = proposal.get("suggestion_id", "unknown")
+            self.logger.log(
+                "ai_output", tool="ASSISTANT", notes=f"shown:{trigger}:{sid}"
+            )
 
         dlg = SuggestionDialog(
             title=proposal["suggestion"].label,
@@ -82,15 +120,48 @@ class AssistantController:
         dlg.exec()
 
         decision_ms = int((time.time() - t0) * 1000)
-        choice = dlg.choice or "ignore"
 
-        # Log décision utilisateur
+        # Fermeture fenêtre = cancel (au lieu de ignore implicite)
+        choice = dlg.choice or "cancel"
+
         if self.logger:
-            self.logger.log("user_action", tool="ASSISTANT", notes=choice)
+            sid = proposal.get("suggestion_id", "unknown")
+            self.logger.log(
+                "user_action",
+                tool="ASSISTANT",
+                notes=f"{choice}:{trigger}:{sid}:ms={decision_ms}",
+            )
+
+        # Si l'utilisateur n'applique pas :
+        # - en auto : on supprime la répétition de cette suggestion (session)
+        if choice in ("ignore", "override", "cancel"):
+            if trigger == "auto":
+                sid = proposal.get("suggestion_id")
+                if sid:
+                    self._auto_suppressed.add(sid)
+                    if self.logger:
+                        self.logger.log(
+                            "assistant_suppress", tool="ASSISTANT", notes=f"{sid}"
+                        )
+            return
 
         if choice == "accept":
             items = proposal["suggestion"].create_items(self.scene)
+
+            self.scene.undo_stack.beginMacro("Assistant apply")
             for it in items:
                 self.scene.addItem(it)
+                self.scene.undo_stack.push(
+                    AddItemCommand(
+                        self.scene, it, text="Assistant item", already_in_scene=True
+                    )
+                )
+            self.scene.undo_stack.endMacro()
+
             if self.logger:
-                self.logger.log("assistant_apply", notes=f"n_items={len(items)}")
+                sid = proposal.get("suggestion_id", "unknown")
+                self.logger.log(
+                    "assistant_apply",
+                    tool="ASSISTANT",
+                    notes=f"{sid}:n_items={len(items)}:ms={decision_ms}",
+                )

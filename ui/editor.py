@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
 )
 from PySide6.QtGui import QAction, QColor, QPixmap, QIcon, QActionGroup
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from drawing.scene import DrawingScene
 from ui.assistant_panel import AssistantPanel
@@ -194,7 +194,9 @@ class EditorWindow(QMainWindow):
             )
 
         self._place_assistant_btn = place_btn
-        self._place_assistant_btn()
+
+        # Placement initial différé : laisse Qt finir le layout
+        QTimer.singleShot(0, self._place_assistant_btn)
 
         # Contrôleur de l'assistant
 
