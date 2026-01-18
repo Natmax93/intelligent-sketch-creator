@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "category": "Porte",
+    "item_id": "door_small"
+  },
+  "items": [
+    {
+      "type": "QGraphicsEllipseItem",
+      "pos": [
+        -3.0,
+        1.0
+      ],
+      "stroke": "#000000",
+      "stroke_width": 2,
+      "fill": "none",
+      "ellipse": [
+        498.0,
+        273.0,
+        16.0,
+        17.0
+      ]
+    },
+    {
+      "type": "QGraphicsEllipseItem",
+      "pos": [
+        0.0,
+        0.0
+      ],
+      "stroke": "#000000",
+      "stroke_width": 2,
+      "fill": "none",
+      "ellipse": [
+        498.0,
+        277.0,
+        10.0,
+        10.0
+      ]
+    },
+    {
+      "type": "QGraphicsRectItem",
+      "pos": [
+        0.0,
+        0.0
+      ],
+      "stroke": "#000000",
+      "stroke_width": 2,
+      "fill": "none",
+      "rect": [
+        403.0,
+        165.0,
+        125.0,
+        215.0
+      ]
+    }
+  ]
+}

@@ -1,6 +1,11 @@
+import json
+from pathlib import Path
+
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsLineItem
 from PySide6.QtGui import QPen
 from PySide6.QtCore import QRectF
+
+from drawing.serialization import deserialize_item
 
 
 def _default_pen(width=2):
@@ -9,86 +14,76 @@ def _default_pen(width=2):
     return pen
 
 
+_TEMPLATE_CACHE = None  # dict[(category, item_id)] -> payload
+
+
+def _load_templates_dev():
+    """
+    Charge assistant/templates_dev/*.json (dev-only).
+    Format attendu :
+      { "meta": {"category": "...", "item_id": "..."}, "items": [ ... ] }
+    """
+    global _TEMPLATE_CACHE
+    if _TEMPLATE_CACHE is not None:
+        return _TEMPLATE_CACHE
+
+    _TEMPLATE_CACHE = {}
+    base = Path(__file__).resolve().parent / "templates_dev"
+    if not base.exists():
+        return _TEMPLATE_CACHE
+
+    for p in base.glob("*.json"):
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+            meta = payload.get("meta", {})
+            cat = meta.get("category")
+            iid = meta.get("item_id")
+            items = payload.get("items", [])
+            if cat and iid and isinstance(items, list):
+                _TEMPLATE_CACHE[(cat, iid)] = payload
+        except Exception:
+            # dev-only : ignore fichier invalide
+            continue
+
+    return _TEMPLATE_CACHE
+
+
 def create_generation_item(category: str, item_id: str):
     """
     Retourne une liste de QGraphicsItem à ajouter sur la scène.
-    Prototype : formes simples.
+
+    Priorité :
+    1) templates JSON dessinés (assistant/templates_dev/)
+    2) fallback : items codés en dur
     """
+    # 1) templates dessinés (dev)
+    templates = _load_templates_dev()
+    payload = templates.get((category, item_id))
+    if payload:
+        out = []
+        for d in payload.get("items", []):
+            it = deserialize_item(d)
+            if it is not None:
+                out.append(it)
+        if out:
+            return out
 
-    items = []
+    # 2) fallback : anciennes formes codées en dur
+    pen = _default_pen(2)
 
-    if category == "Porte":
-        # Porte = rectangle vertical + poignée (petit cercle)
-        if item_id == "door_small":
-            rect = QGraphicsRectItem(QRectF(0, 0, 60, 100))
-            rect.setPen(_default_pen(2))
-            knob = QGraphicsEllipseItem(QRectF(45, 50, 8, 8))
-            knob.setPen(_default_pen(2))
-            items = [rect, knob]
+    if category == "basic" and item_id == "rect":
+        r = QGraphicsRectItem(QRectF(0, 0, 120, 80))
+        r.setPen(pen)
+        return [r]
 
-        elif item_id == "door_double":
-            left = QGraphicsRectItem(QRectF(0, 0, 50, 110))
-            right = QGraphicsRectItem(QRectF(52, 0, 50, 110))
-            left.setPen(_default_pen(2))
-            right.setPen(_default_pen(2))
-            items = [left, right]
+    if category == "basic" and item_id == "ellipse":
+        e = QGraphicsEllipseItem(QRectF(0, 0, 120, 80))
+        e.setPen(pen)
+        return [e]
 
-        elif item_id == "door_round":
-            # Simplification : rect + ellipse en haut
-            rect = QGraphicsRectItem(QRectF(0, 20, 70, 90))
-            top = QGraphicsEllipseItem(QRectF(0, 0, 70, 40))
-            rect.setPen(_default_pen(2))
-            top.setPen(_default_pen(2))
-            items = [rect, top]
+    if category == "basic" and item_id == "line":
+        l = QGraphicsLineItem(0, 0, 120, 0)
+        l.setPen(pen)
+        return [l]
 
-    elif category == "Roue":
-        if item_id == "wheel_small":
-            wheel = QGraphicsEllipseItem(QRectF(0, 0, 50, 50))
-            wheel.setPen(_default_pen(2))
-            items = [wheel]
-
-        elif item_id == "wheel_big":
-            wheel = QGraphicsEllipseItem(QRectF(0, 0, 80, 80))
-            wheel.setPen(_default_pen(2))
-            items = [wheel]
-
-        elif item_id == "wheel_spoked":
-            wheel = QGraphicsEllipseItem(QRectF(0, 0, 70, 70))
-            wheel.setPen(_default_pen(2))
-            # 2 rayons en croix (prototype)
-            h = QGraphicsLineItem(0, 35, 70, 35)
-            v = QGraphicsLineItem(35, 0, 35, 70)
-            h.setPen(_default_pen(2))
-            v.setPen(_default_pen(2))
-            items = [wheel, h, v]
-
-    elif category == "Carrosserie":
-        if item_id == "body_compact":
-            body = QGraphicsRectItem(QRectF(0, 20, 140, 50))
-            cabin = QGraphicsRectItem(QRectF(30, 0, 60, 30))
-            body.setPen(_default_pen(2))
-            cabin.setPen(_default_pen(2))
-            items = [body, cabin]
-
-        elif item_id == "body_sedan":
-            body = QGraphicsRectItem(QRectF(0, 25, 180, 50))
-            cabin = QGraphicsRectItem(QRectF(50, 0, 80, 35))
-            body.setPen(_default_pen(2))
-            cabin.setPen(_default_pen(2))
-            items = [body, cabin]
-
-        elif item_id == "body_truck":
-            body = QGraphicsRectItem(QRectF(0, 30, 200, 50))
-            cab = QGraphicsRectItem(QRectF(0, 0, 60, 35))
-            bed = QGraphicsRectItem(QRectF(65, 10, 135, 70))
-            body.setPen(_default_pen(2))
-            cab.setPen(_default_pen(2))
-            bed.setPen(_default_pen(2))
-            items = [cab, bed]
-
-    # rendre chaque item sélectionnable/déplaçable (cohérent Tool.SELECT)
-    for it in items:
-        it.setFlag(it.GraphicsItemFlag.ItemIsSelectable, True)
-        it.setFlag(it.GraphicsItemFlag.ItemIsMovable, True)
-
-    return items
+    return []

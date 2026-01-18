@@ -23,6 +23,8 @@ from logs.logger import EventLogger
 from ui.assistant_floating import FloatingAssistantButton
 from assistant.controller import AssistantController
 from assistant.generation_catalog import create_generation_item
+from drawing.commands import AddItemCommand
+from ui.template_builder import TemplateBuilderWindow
 
 
 class EditorWindow(QMainWindow):
@@ -231,11 +233,25 @@ class EditorWindow(QMainWindow):
 
             # 2) positionner intelligemment : proche du centre de la vue
             center = self.view.mapToScene(self.view.viewport().rect().center())
+
+            # Macro = un seul undo pour l'ensemble
+            self.scene.undo_stack.beginMacro(f"Generate {category}:{item_id}")
+
             for it in items:
                 it.setPos(center)
+                self.scene.addItem(it)
 
                 # ajouter à la scène
                 self.scene.addItem(it)
+
+                # 2) Commande undoable (already_in_scene=True car déjà ajouté)
+                self.scene.undo_stack.push(
+                    AddItemCommand(
+                        self.scene, it, text="Generated item", already_in_scene=True
+                    )
+                )
+
+            self.scene.undo_stack.endMacro()
 
             # 3) log (si tu as self.logger)
             if hasattr(self, "logger") and self.logger:
@@ -246,6 +262,20 @@ class EditorWindow(QMainWindow):
 
         self.gen_panel.suggestion_chosen.connect(on_suggestion)
 
+        # --- Template Builder (dev) ---
+        # TODO : à commenter une fois les templates créés
+        act_tpl = QAction("Template Builder (dev)", self)
+        act_tpl.triggered.connect(self._open_template_builder)
+        toolbar.addSeparator()
+        toolbar.addAction(act_tpl)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._place_assistant_btn()
+
+    def _open_template_builder(self):
+        if not hasattr(self, "_tpl_builder") or self._tpl_builder is None:
+            self._tpl_builder = TemplateBuilderWindow(parent=self)
+        self._tpl_builder.show()
+        self._tpl_builder.raise_()
+        self._tpl_builder.activateWindow()

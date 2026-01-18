@@ -53,6 +53,13 @@ from drawing.tools import Tool
 # Commandes “undoables” : ajout, suppression, déplacement
 from drawing.commands import AddItemCommand, RemoveItemCommand, MoveItemsCommand
 
+# Utilitaires pour la sérialisation
+from drawing.serialization import (
+    serialize_item as _serialize_item_shared,
+    deserialize_item as _deserialize_item_shared,
+    apply_fill_from as _apply_fill_from_shared,
+)
+
 
 class DrawingScene(QGraphicsScene):
     item_created = Signal(object)  # émettra le QGraphicsItem créé
@@ -130,72 +137,7 @@ class DrawingScene(QGraphicsScene):
         - On supporte seulement Line/Rect/Ellipse/Path (traits libres).
         - Pour le path : on stocke les éléments (MoveTo/LineTo/...) du QPainterPath.
         """
-        # Récupère le style de contour si l'item expose pen()
-        pen = item.pen() if hasattr(item, "pen") else None
-        stroke = pen.color().name() if pen else "#000000"  # couleur de contour en hex
-        width = pen.width() if pen else 1  # épaisseur du contour
-
-        # Récupère le fill si l'item expose brush()
-        fill = "none"
-        b = item.brush()
-        if b.style() != Qt.BrushStyle.NoBrush:
-            c = b.color()
-            # optionnel : si alpha 0, on considère "none"
-            if c.alpha() != 0:
-                fill = c.name()
-
-        # Données communes à tous les types d'items
-        base = {
-            "type": type(item).__name__,  # ex "QGraphicsRectItem"
-            "pos": [item.pos().x(), item.pos().y()],  # position (translation) de l'item
-            "stroke": stroke,  # couleur du contour
-            "stroke_width": width,  # épaisseur du contour
-            "fill": fill,  # couleur de remplissage ou "none"
-        }
-
-        # Cas selon le type concret d'item
-        if isinstance(item, QGraphicsLineItem):
-            # On stocke les coordonnées du segment
-            line = item.line()
-            base["line"] = [line.x1(), line.y1(), line.x2(), line.y2()]
-
-        elif isinstance(item, QGraphicsRectItem):
-            # On stocke la bounding box du rectangle
-            r = item.rect()
-            base["rect"] = [r.x(), r.y(), r.width(), r.height()]
-
-        elif isinstance(item, QGraphicsEllipseItem):
-            # Une ellipse est définie par son rectangle englobant (bounding box)
-            r = item.rect()
-            base["ellipse"] = [r.x(), r.y(), r.width(), r.height()]
-
-        elif isinstance(item, QGraphicsPathItem):
-            # Pour un prototype : on stocke les éléments du path.
-            # (Suffisant si ton stylo fait surtout des segments.)
-            path = item.path()
-            elems = []
-            for i in range(path.elementCount()):
-                e = path.elementAt(i)
-                # e.type : MoveTo/LineTo/CurveTo... (on le garde pour info/debug)
-                elems.append([e.x, e.y, int(e.type)])
-            base["path_elems"] = elems
-
-        elif isinstance(item, QGraphicsPolygonItem):
-            poly = item.polygon()
-            base["polygon"] = [
-                [poly.at(i).x(), poly.at(i).y()] for i in range(poly.count())
-            ]
-
-            # Optionnel : préserver un tag assistant si tu en utilises un
-            tag = item.data(int(Qt.UserRole))
-            if tag is not None:
-                base["assistant_tag"] = tag
-
-        else:
-            # Type non supporté : on ne peut pas copier/coller cet item
-            return None
-
-        return base
+        return _serialize_item_shared(item)
 
     def _make_pen(self, width=2):
         """
@@ -250,85 +192,14 @@ class DrawingScene(QGraphicsScene):
         """
         Reconstruit un brush depuis des données sérialisées (clipboard).
         """
-        if fill_hex == "none":
-            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        else:
-            item.setBrush(QBrush(QColor(fill_hex)))
+        _apply_fill_from_shared(item, fill_hex)
 
     def _deserialize_item(self, data):
         """
         Reconstruit un QGraphicsItem depuis un dict (issu du clipboard).
         Cette méthode est l'inverse logique de _serialize_item().
         """
-        t = data["type"]
-
-        # Position globale de l'item (translation)
-        pos = QPointF(data["pos"][0], data["pos"][1])
-
-        # Styles
-        pen = self._make_pen_from(
-            data.get("stroke", "#000000"),
-            data.get("stroke_width", 1),
-        )
-        fill = data.get("fill", "none")
-
-        item = None
-
-        # Reconstruction selon le type
-        if t == "QGraphicsLineItem":
-            x1, y1, x2, y2 = data["line"]
-            item = QGraphicsLineItem(QLineF(x1, y1, x2, y2))
-            item.setPen(pen)
-
-        elif t == "QGraphicsRectItem":
-            x, y, w, h = data["rect"]
-            item = QGraphicsRectItem(QRectF(x, y, w, h))
-            item.setPen(pen)
-            self._apply_fill_from(item, fill)
-
-        elif t == "QGraphicsEllipseItem":
-            x, y, w, h = data["ellipse"]
-            item = QGraphicsEllipseItem(QRectF(x, y, w, h))
-            item.setPen(pen)
-            self._apply_fill_from(item, fill)
-
-        elif t == "QGraphicsPathItem":
-            elems = data["path_elems"]
-            if not elems:
-                return None
-
-            # Reconstruit un path en faisant un moveTo puis une suite de lineTo.
-            # (On ignore le etype ici : OK pour un prototype basé sur segments.)
-            path = QPainterPath()
-            x0, y0, _ = elems[0]
-            path.moveTo(x0, y0)
-            for x, y, etype in elems[1:]:
-                path.lineTo(x, y)
-
-            item = QGraphicsPathItem(path)
-            item.setPen(pen)
-
-        elif t == "QGraphicsPolygonItem":
-            pts = data["polygon"]
-            poly = QPolygonF([QPointF(x, y) for x, y in pts])
-            item = QGraphicsPolygonItem(poly)
-            item.setPen(pen)
-            self._apply_fill_from(item, fill)
-
-            # Optionnel : restaurer le tag assistant
-            if "assistant_tag" in data:
-                item.setData(int(Qt.UserRole), data["assistant_tag"])
-
-        # Type inconnu/non supporté
-        if item is None:
-            return None
-
-        # Rend l'item manipulable en mode SELECT
-        self._enable_interaction_flags(item)
-
-        # Applique la position globale
-        item.setPos(pos)
-        return item
+        return _deserialize_item_shared(data)
 
     def _finalize_created_item(self, item):
         """À appeler quand un item 'définitif' est créé par l'utilisateur."""
