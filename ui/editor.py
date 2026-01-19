@@ -7,6 +7,9 @@ Responsabilité :
 - afficher un panneau assistant sous forme de DockWidget
 """
 
+import random
+import time
+
 from PySide6.QtWidgets import (
     QMainWindow,
     QToolBar,
@@ -16,9 +19,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QColorDialog,
     QButtonGroup,
+    QVBoxLayout,
+    QPushButton,
+    QWidget,
+    QDialog,
+    QHBoxLayout,
 )
-from PySide6.QtGui import QAction, QColor, QPixmap, QIcon, QActionGroup
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal
 
 from drawing.scene import DrawingScene
 from ui.assistant_panel import GenerationPanel
@@ -38,6 +46,18 @@ class EditorWindow(QMainWindow):
 
         self.logger = EventLogger("logs/events.csv")
 
+        # --- Condition between-subjects (simple) ---
+        self.condition = None  # choisie au moment du test
+
+        # True si H_ONLY False sinon (mode vérrouillé)
+        self._test_lock = False
+
+        # --- Protocole test ---
+        self._test_running = False
+        self._trial_started_at = None  # time.time()
+        self._tasks = [("cat", "Chat"), ("castle", "Château"), ("car", "Voiture")]
+        self._trial_index = -1
+
         self.scene = DrawingScene(logger=self.logger)
         self.view = QGraphicsView(self.scene)
 
@@ -45,6 +65,11 @@ class EditorWindow(QMainWindow):
         self.view.setDragMode(QGraphicsView.RubberBandDrag)
 
         self.setCentralWidget(self.view)
+
+        # Fenêtre de test
+        self.task_window = TaskWindow()
+        self.task_window.doneClicked.connect(self.on_done_clicked)
+        self.task_window.set_done_enabled(False)
 
         toolbar = QToolBar("Outils")
         self.addToolBar(toolbar)
@@ -308,14 +333,14 @@ class EditorWindow(QMainWindow):
         # Options de l'assistant
         toolbar.addSeparator()
 
-        act_auto = QAction("Auto suggestions", self)
-        act_auto.setCheckable(True)
-        toolbar.addAction(act_auto)
+        self.act_auto = QAction("Auto suggestions", self)
+        self.act_auto.setCheckable(True)
+        toolbar.addAction(self.act_auto)
 
-        act_float = QAction("Afficher assistant", self)
-        act_float.setCheckable(True)
-        act_float.setChecked(True)
-        toolbar.addAction(act_float)
+        self.act_float = QAction("Afficher assistant", self)
+        self.act_float.setCheckable(True)
+        self.act_float.setChecked(True)
+        toolbar.addAction(self.act_float)
 
         # Bouton assistant
 
@@ -339,8 +364,8 @@ class EditorWindow(QMainWindow):
 
         self.assistant_controller = AssistantController(self, self.scene, self.logger)
 
-        act_auto.toggled.connect(self.assistant_controller.set_auto_enabled)
-        act_float.toggled.connect(self.assistant_controller.set_floating_visible)
+        self.act_auto.toggled.connect(self.assistant_controller.set_auto_enabled)
+        self.act_float.toggled.connect(self.assistant_controller.set_floating_visible)
 
         # --- Panneau (Dock) de génération d'items ---
 
@@ -355,15 +380,12 @@ class EditorWindow(QMainWindow):
 
         # Ajouter une action toolbar "Génération IA" qui toggle le dock
 
-        act_gen = QAction("Génération IA", self)
-        act_gen.setCheckable(True)  # permet un état ON/OFF
-        act_gen.setChecked(False)
-        toolbar.addAction(act_gen)
+        self.act_gen = QAction("Génération IA", self)
+        self.act_gen.setCheckable(True)  # permet un état ON/OFF
+        self.act_gen.setChecked(False)
+        toolbar.addAction(self.act_gen)
 
-        def toggle_gen(checked: bool):
-            self.gen_dock.setVisible(checked)
-
-        act_gen.toggled.connect(toggle_gen)
+        self.act_gen.toggled.connect(self._toggle_gen_dock_guarded)
 
         def on_suggestion(category: str, item_id: str):
             # 1) créer items
@@ -401,10 +423,23 @@ class EditorWindow(QMainWindow):
 
         # --- Template Builder (dev) ---
         # TODO : à commenter une fois les templates créés
-        act_tpl = QAction("Template Builder (dev)", self)
-        act_tpl.triggered.connect(self._open_template_builder)
+        # act_tpl = QAction("Template Builder (dev)", self)
+        # act_tpl.triggered.connect(self._open_template_builder)
+        # toolbar.addSeparator()
+        # toolbar.addAction(act_tpl)
+
+        # editor.py (dans __init__, après tes autres actions toolbar)
+
         toolbar.addSeparator()
-        toolbar.addAction(act_tpl)
+
+        self.act_test = QAction("Test", self)
+        self.act_test.triggered.connect(self.start_test)
+        toolbar.addAction(self.act_test)
+
+        self.act_done = QAction("Done", self)
+        self.act_done.setEnabled(False)  # activé seulement pendant un essai
+        self.act_done.triggered.connect(self.on_done_clicked)
+        toolbar.addAction(self.act_done)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -416,3 +451,259 @@ class EditorWindow(QMainWindow):
         self._tpl_builder.show()
         self._tpl_builder.raise_()
         self._tpl_builder.activateWindow()
+
+    def start_test(self):
+        if self._test_running:
+            return
+
+        # Choisir la condition AU DÉBUT du test
+        dlg = ConditionDialog(self)
+        if dlg.exec() != QDialog.Accepted or dlg.selected_condition is None:
+            return
+
+        # Verrouillage condition pour tout le test
+        self.condition = dlg.selected_condition
+
+        # Appliquer contexte logger (Solution A)
+        self.logger.set_context(condition=self.condition)
+
+        # Log haut niveau (utile pour audit)
+        self.logger.log(
+            "test_start", notes=f"condition={self.condition};3_tasks_fixed_order"
+        )
+
+        # Verrouiller uniquement si test H_ONLY
+        if self.condition == "H_ONLY":
+            self._apply_h_only_lock(True)
+        else:
+            # H_PLUS_IA : on laisse les contrôles tels quels
+            self._apply_h_only_lock(False)
+
+        # Activer/désactiver l'assistant pour toute la durée du test
+        self._apply_assistant_condition(self.condition)
+
+        # Lancer protocole
+        self._test_running = True
+        self.act_test.setEnabled(False)
+        self._trial_index = -1
+        self._trial_started_at = None
+
+        self._start_next_trial()
+
+    def _toggle_gen_dock_guarded(self, checked: bool):
+        # Si on est en test H_ONLY, on bloque toute ouverture/fermeture via l'action
+        if self._test_running and self.condition == "H_ONLY":
+            # on force l'action à OFF pour cohérence visuelle
+            self.act_gen.blockSignals(True)
+            self.act_gen.setChecked(False)
+            self.act_gen.blockSignals(False)
+
+            self.gen_dock.hide()
+            return
+
+        self.gen_dock.setVisible(checked)
+
+    def _apply_assistant_condition(self, condition: str):
+        """Applique la condition expérimentale au comportement assistant."""
+        if condition == "H_ONLY":
+            # Le verrouillage gère déjà l'UI ; ici on assure juste la logique
+            self.assistant_controller.set_auto_enabled(False)
+            self.assistant_controller.set_floating_visible(False)
+        else:
+            # IA autorisée : ne force pas OFF, laisse l'utilisateur choisir
+            self.assistant_btn.setEnabled(True)
+
+    def _start_next_trial(self):
+        self._trial_index += 1
+
+        if self._trial_index >= len(self._tasks):
+            self._end_test()
+            return
+
+        task_id, label = self._tasks[self._trial_index]
+
+        # Contexte logger pour tagger tous les events fins
+        self.logger.set_context(task_id=task_id, trial_index=self._trial_index + 1)
+
+        # Mettre à jour / afficher la fenêtre modèle (non-modale)
+        pm = make_task_pixmap(task_id)
+        self.task_window.set_task(label, pm)
+        self.task_window.set_done_enabled(True)
+        self.task_window.show()
+        self.task_window.raise_()
+        self.task_window.activateWindow()
+
+        # Reset scène (prototype)
+        self.scene.clear()
+        self.scene.undo_stack.clear()
+
+        # Démarrer l’essai immédiatement (puisque la fenêtre ne “valide” plus)
+        self._trial_started_at = time.time()
+        self.logger.log("trial_start", notes=f"task={task_id}")
+
+    def on_done_clicked(self):
+        if not self._test_running or self._trial_started_at is None:
+            return
+
+        now = time.time()
+        duration_s = now - self._trial_started_at
+
+        # Logs haut niveau
+        self.logger.log("done_clicked")
+        self.logger.log("trial_end", notes=f"duration_s={duration_s:.3f}")
+
+        # Préparer essai suivant
+        self._trial_started_at = None
+        self.task_window.set_done_enabled(False)
+
+        self._start_next_trial()
+
+    def _end_test(self, cancelled: bool = False):
+        self._test_running = False
+        self.act_test.setEnabled(True)
+        self.task_window.set_done_enabled(False)
+        self.task_window.close()
+
+        # Déverrouiller si on était en H_ONLY
+        if self.condition == "H_ONLY":
+            self._apply_h_only_lock(False)
+
+        self.logger.log("test_end", notes=("cancelled" if cancelled else "completed"))
+
+        # Nettoyer contexte essai (optionnel)
+        self.logger.set_context(task_id="", trial_index="")
+
+    def _apply_h_only_lock(self, enabled: bool):
+        """
+        Verrouille/déverrouille les contrôles IA pendant un test H_ONLY.
+        Ne doit pas être appelé pour H_PLUS_IA.
+        """
+        self._test_lock = enabled
+
+        if enabled:
+            # 1) Fermer le dock et empêcher son ouverture
+            self.gen_dock.hide()
+            self.act_gen.blockSignals(True)
+            self.act_gen.setChecked(False)
+            self.act_gen.blockSignals(False)
+            self.act_gen.setEnabled(False)
+
+            # 2) Désactiver Auto suggestions + forcer OFF
+            self.assistant_controller.set_auto_enabled(False)
+            self.act_auto.blockSignals(True)
+            self.act_auto.setChecked(False)
+            self.act_auto.blockSignals(False)
+            self.act_auto.setEnabled(False)
+
+            # 3) Désactiver Afficher assistant + forcer OFF
+            self.assistant_controller.set_floating_visible(False)
+            self.act_float.blockSignals(True)
+            self.act_float.setChecked(False)
+            self.act_float.blockSignals(False)
+            self.act_float.setEnabled(False)
+
+            # 4) Désactiver bouton assistant flottant
+            self.assistant_btn.setEnabled(False)
+
+        else:
+            # Réactiver contrôles (état par défaut ; l'utilisateur choisira ensuite)
+            self.act_gen.setEnabled(True)
+            self.act_auto.setEnabled(True)
+            self.act_float.setEnabled(True)
+            self.assistant_btn.setEnabled(True)
+
+
+class TaskWindow(QWidget):
+    doneClicked = Signal()
+
+    def __init__(self, parent=None):
+        # Qt.Window => vraie fenêtre indépendante (pas juste un widget enfant)
+        super().__init__(parent)
+        self.setWindowTitle("Modèle à reproduire")
+
+        self._label = QLabel(self)
+        self._label.setAlignment(Qt.AlignCenter)
+
+        self._done_btn = QPushButton("Done", self)
+        self._done_btn.clicked.connect(self.doneClicked.emit)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self._label)
+        layout.addWidget(self._done_btn)
+
+        # Optionnel : empêcher le redimensionnement trop petit
+        self.setMinimumSize(260, 300)
+
+    def set_task(self, title: str, pixmap):
+        self.setWindowTitle(f"Modèle : {title}")
+        self._label.setPixmap(pixmap)
+
+    def set_done_enabled(self, enabled: bool):
+        self._done_btn.setEnabled(enabled)
+
+
+def make_task_pixmap(task_id: str, size: int = 220) -> QPixmap:
+    """Modèle simple généré en code (pas besoin de fichiers images)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.white)
+
+    p = QPainter(pm)
+    pen = QPen(Qt.black)
+    pen.setWidth(3)
+    p.setPen(pen)
+
+    if task_id == "cat":
+        # tête + oreilles (très schématique)
+        p.drawEllipse(60, 70, 100, 90)
+        p.drawLine(75, 80, 95, 40)
+        p.drawLine(95, 40, 115, 80)
+        p.drawLine(125, 80, 145, 40)
+        p.drawLine(145, 40, 165, 80)
+    elif task_id == "castle":
+        # base + 2 tours
+        p.drawRect(50, 90, 120, 90)
+        p.drawRect(35, 70, 35, 110)
+        p.drawRect(150, 70, 35, 110)
+        # créneaux
+        for x in range(55, 160, 20):
+            p.drawRect(x, 75, 10, 15)
+    elif task_id == "car":
+        # carrosserie + roues
+        p.drawRect(50, 110, 120, 50)
+        p.drawLine(70, 110, 100, 85)
+        p.drawLine(100, 85, 140, 85)
+        p.drawLine(140, 85, 160, 110)
+        p.drawEllipse(70, 150, 25, 25)
+        p.drawEllipse(140, 150, 25, 25)
+
+    p.end()
+    return pm
+
+
+class ConditionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Choix du mode de test")
+        self.setModal(True)
+
+        self.selected_condition = None  # "H_ONLY" ou "H_PLUS_IA"
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel("Souhaites-tu faire le test avec IA ou sans IA ?", self)
+        )
+
+        row = QHBoxLayout()
+        btn_no = QPushButton("Sans IA", self)
+        btn_ai = QPushButton("Avec IA", self)
+
+        btn_no.clicked.connect(lambda: self._choose("H_ONLY"))
+        btn_ai.clicked.connect(lambda: self._choose("H_PLUS_IA"))
+
+        row.addWidget(btn_no)
+        row.addWidget(btn_ai)
+        layout.addLayout(row)
+
+    def _choose(self, condition: str):
+        self.selected_condition = condition
+        self.accept()
