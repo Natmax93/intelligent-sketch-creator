@@ -14,5 +14,6 @@ class Tool(Enum):
     PEN = auto()  # Dessin libre
     RECT = auto()  # Rectangle
     ELLIPSE = auto()  # Ellipse
+    TRIANGLE = auto()  # Triangle
     LINE = auto()  # Ligne
     ERASER = auto()  # Gomme

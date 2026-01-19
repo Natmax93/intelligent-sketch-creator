@@ -205,6 +205,19 @@ class DrawingScene(QGraphicsScene):
         """À appeler quand un item 'définitif' est créé par l'utilisateur."""
         self.item_created.emit(item)
 
+    def _triangle_polygon(self, p0: QPointF, p1: QPointF) -> QPolygonF:
+        """
+        Construit un triangle isocèle dans la bounding box (p0, p1).
+        p0 = point press, p1 = point courant.
+        """
+        rect = QRectF(p0, p1).normalized()
+
+        top = QPointF(rect.center().x(), rect.top())
+        left = QPointF(rect.left(), rect.bottom())
+        right = QPointF(rect.right(), rect.bottom())
+
+        return QPolygonF([top, left, right])
+
     # ---------
     # API publique (appelée par l'UI)
     # ---------
@@ -474,6 +487,25 @@ class DrawingScene(QGraphicsScene):
             event.accept()
             return
 
+        # ---------------- TRIANGLE ----------------
+        if self._tool == Tool.TRIANGLE and event.button():
+            self._shape_start = p
+
+            poly = self._triangle_polygon(p, p)  # triangle "dégénéré" au départ
+            self._shape_item = QGraphicsPolygonItem(poly)
+
+            self._shape_item.setPen(self._make_pen(width=2))
+            self._apply_fill(self._shape_item)  # fill courant
+            self._enable_interaction_flags(self._shape_item)
+
+            self.addItem(self._shape_item)
+
+            if self.logger:
+                self.logger.log(event_type="triangle_start", tool="TRIANGLE")
+
+            event.accept()
+            return
+
         # ---------------- SELECT ----------------
         if self._tool == Tool.SELECT:
             # Mémorise ce qu'il y a sous la souris et la position du press
@@ -532,19 +564,22 @@ class DrawingScene(QGraphicsScene):
             event.accept()
             return
 
-        # ---------------- LINE/RECT/ELLIPSE ----------------
+        # ---------------- LINE/RECT/ELLIPSE/TRIANGLE ----------------
         if (
-            self._tool in (Tool.LINE, Tool.RECT, Tool.ELLIPSE)
+            self._tool in (Tool.LINE, Tool.RECT, Tool.ELLIPSE, Tool.TRIANGLE)
             and self._shape_start is not None
             and self._shape_item is not None
         ):
             if self._tool == Tool.LINE:
-                # Segment entre le point de départ et la position courante
                 self._shape_item.setLine(QLineF(self._shape_start, p))
-            else:
-                # Pour rect/ellipse : on utilise un QRectF normalisé (x<=, y<=)
+
+            elif self._tool in (Tool.RECT, Tool.ELLIPSE):
                 rect = QRectF(self._shape_start, p).normalized()
                 self._shape_item.setRect(rect)
+
+            else:  # TRIANGLE
+                poly = self._triangle_polygon(self._shape_start, p)
+                self._shape_item.setPolygon(poly)
 
             event.accept()
             return
@@ -591,7 +626,7 @@ class DrawingScene(QGraphicsScene):
 
         # ---------------- LINE/RECT/ELLIPSE ----------------
         if (
-            self._tool in (Tool.LINE, Tool.RECT, Tool.ELLIPSE)
+            self._tool in (Tool.LINE, Tool.RECT, Tool.ELLIPSE, Tool.TRIANGLE)
             and self._shape_item is not None
         ):
             # Log de fin (utile pour debug/analytics)
@@ -612,13 +647,20 @@ class DrawingScene(QGraphicsScene):
                         item_type="QGraphicsRectItem",
                         notes=f"x={r.x():.1f},y={r.y():.1f},w={r.width():.1f},h={r.height():.1f}",
                     )
-                else:
+                elif self._tool == Tool.ELLIPSE:
                     r = self._shape_item.rect()
                     self.logger.log(
                         event_type="ellipse_end",
                         tool="ELLIPSE",
                         item_type="QGraphicsEllipseItem",
                         notes=f"x={r.x():.1f},y={r.y():.1f},w={r.width():.1f},h={r.height():.1f}",
+                    )
+                elif self._tool == Tool.TRIANGLE:
+                    self.logger.log(
+                        event_type="triangle_end",
+                        tool="TRIANGLE",
+                        item_type="QGraphicsPolygonItem",
+                        notes=f"n_points={self._shape_item.polygon().count()}",
                     )
 
             # Enregistre l’ajout de la forme dans l’historique (undoable)

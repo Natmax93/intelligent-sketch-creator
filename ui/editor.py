@@ -137,6 +137,10 @@ class EditorWindow(QMainWindow):
         act_ellipse.triggered.connect(lambda: set_tool_and_view_mode(Tool.ELLIPSE))
         toolbar.addAction(act_ellipse)
 
+        act_triangle = QAction("Triangle", self)
+        act_triangle.triggered.connect(lambda: set_tool_and_view_mode(Tool.TRIANGLE))
+        toolbar.addAction(act_triangle)
+
         copy_act = QAction("Copier", self)
         copy_act.setShortcut("Ctrl+C")
         copy_act.triggered.connect(lambda checked=False: self.scene.copy_selection())

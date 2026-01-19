@@ -101,7 +101,7 @@ def serialize_item(item) -> Optional[Dict[str, Any]]:
             [float(poly.at(i).x()), float(poly.at(i).y())] for i in range(poly.count())
         ]
 
-        # Optionnel : préserver un tag assistant si tu en utilises un
+        # Préserver un tag assistant
         tag = item.data(int(Qt.UserRole))
         if tag is not None:
             base["assistant_tag"] = tag
